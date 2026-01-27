@@ -23,8 +23,12 @@ import {
   addDefaultParsers,
   MacOSScrollAccel,
   type ScrollAcceleration,
+  MarkdownRenderable,
+  type MarkdownOptions,
+  type RenderContext,
   TextAttributes,
   RGBA,
+  SyntaxStyle,
 } from "@opentui/core"
 import { Prompt, type PromptRef } from "@tui/component/prompt"
 import type { AssistantMessage, Part, ToolPart, UserMessage, TextPart, ReasoningPart } from "@opencode-ai/sdk/v2"
@@ -43,7 +47,7 @@ import type { ApplyPatchTool } from "@/tool/apply_patch"
 import type { WebFetchTool } from "@/tool/webfetch"
 import type { TaskTool } from "@/tool/task"
 import type { QuestionTool } from "@/tool/question"
-import { useKeyboard, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
+import { extend, useKeyboard, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "@tui/context/sdk"
 import { useCommandDialog } from "@tui/component/dialog-command"
 import { useKeybind } from "@tui/context/keybind"
@@ -70,12 +74,31 @@ import { usePromptRef } from "../../context/prompt"
 import { useExit } from "../../context/exit"
 import { Filesystem } from "@/util/filesystem"
 import { Global } from "@/global"
+import { Flag } from "@/flag/flag"
 import { PermissionPrompt } from "./permission"
 import { QuestionPrompt } from "./question"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import { formatTranscript } from "../../util/transcript"
 
 addDefaultParsers(parsers.parsers)
+
+const fallback = SyntaxStyle.fromTheme([
+  {
+    scope: ["default"],
+    style: {
+      foreground: RGBA.fromInts(255, 255, 255),
+    },
+  },
+])
+
+class MarkdownSafe extends MarkdownRenderable {
+  constructor(ctx: RenderContext, options: MarkdownOptions) {
+    const syntaxStyle = options.syntaxStyle ?? fallback
+    super(ctx, { ...options, syntaxStyle })
+  }
+}
+
+extend({ markdown: MarkdownSafe })
 
 class CustomSpeedScroll implements ScrollAcceleration {
   constructor(private speed: number) {}
@@ -1302,6 +1325,18 @@ const PART_MAPPING = {
 function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: AssistantMessage }) {
   const { theme, subtleSyntax } = useTheme()
   const ctx = use()
+  const useMarkdown = Flag.OPENCODE_EXPERIMENTAL_MARKDOWN_RENDERABLE
+  const style = createMemo(
+    () =>
+      subtleSyntax() ??
+      SyntaxStyle.fromTheme([
+        {
+          scope: ["default"],
+          style: { foreground: theme.textMuted },
+        },
+      ]),
+  )
+  const canRender = createMemo(() => useMarkdown && ctx.conceal() && !!style())
   const content = createMemo(() => {
     // Filter out redacted reasoning chunks from OpenRouter
     // OpenRouter sends encrypted reasoning data that appears as [REDACTED]
@@ -1318,15 +1353,27 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
         customBorderChars={SplitBorder.customBorderChars}
         borderColor={theme.backgroundElement}
       >
-        <code
-          filetype="markdown"
-          drawUnstyledText={false}
-          streaming={true}
-          syntaxStyle={subtleSyntax()}
-          content={"_Thinking:_ " + content()}
-          conceal={ctx.conceal()}
-          fg={theme.textMuted}
-        />
+        <Show
+          when={canRender()}
+          fallback={
+            <code
+              filetype="markdown"
+              drawUnstyledText={false}
+              streaming={true}
+              syntaxStyle={style()}
+              content={"_Thinking:_ " + content()}
+              conceal={ctx.conceal()}
+              fg={theme.textMuted}
+            />
+          }
+        >
+          <markdown
+            content={"_Thinking:_ " + content()}
+            syntaxStyle={style()}
+            conceal={ctx.conceal()}
+            streaming={true}
+          />
+        </Show>
       </box>
     </Show>
   )
@@ -1335,18 +1382,43 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
 function TextPart(props: { last: boolean; part: TextPart; message: AssistantMessage }) {
   const ctx = use()
   const { theme, syntax } = useTheme()
+  const useMarkdown = Flag.OPENCODE_EXPERIMENTAL_MARKDOWN_RENDERABLE
+  const style = createMemo(
+    () =>
+      syntax() ??
+      SyntaxStyle.fromTheme([
+        {
+          scope: ["default"],
+          style: { foreground: theme.text },
+        },
+      ]),
+  )
+  const canRender = createMemo(() => useMarkdown && ctx.conceal() && !!style())
+  const text = createMemo(() => props.part.text.trim())
   return (
-    <Show when={props.part.text.trim()}>
+    <Show when={text()}>
       <box id={"text-" + props.part.id} paddingLeft={3} marginTop={1} flexShrink={0}>
-        <code
-          filetype="markdown"
-          drawUnstyledText={false}
-          streaming={true}
-          syntaxStyle={syntax()}
-          content={props.part.text.trim()}
-          conceal={ctx.conceal()}
-          fg={theme.text}
-        />
+        <Show
+          when={canRender()}
+          fallback={
+            <code
+              filetype="markdown"
+              drawUnstyledText={false}
+              streaming={true}
+              syntaxStyle={style()}
+              content={text()}
+              conceal={ctx.conceal()}
+              fg={theme.text}
+            />
+          }
+        >
+          <markdown
+            content={text()}
+            syntaxStyle={style()}
+            conceal={ctx.conceal()}
+            streaming={true}
+          />
+        </Show>
       </box>
     </Show>
   )
